@@ -3,347 +3,444 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>netline — live traffic map</title>
+<title>netline — traffic</title>
 <style>
+  /* Design tokens, the only place a literal colour or size is named. Views
+     read them; nothing in this file styles outside this block. */
   :root{
-    --bg:#0a0c0f; --panel:#11151a; --panel2:#0e1216; --line:#1d242c;
-    --txt:#dfe6ee; --muted:#7a8697; --dim:#4a5461;
-    --in:#3ddc84; --out:#f0a92b; --flag:#ef4444;
+    /* surfaces, steps away from bg so elevation reads without shadows */
+    --bg:#0a0c0f; --surface:#11151a; --raised:#141920;
+    --line:#1d242c; --line-soft:#161b21;
+    /* text: three levels, contrast floors 4.5:1 and 3:1 */
+    --fg:#dfe6ee; --muted:#7a8697; --faint:#4a5461;
+    /* status: the four roles, never blue */
+    --ok:#3ddc84; --warn:#f0a92b; --bad:#ef4444; --neutral:#5b6777;
+    /* the one accent on the screen: the primary action */
+    --accent:#5b9cf8;
+    /* motion: instant hover, one spring for disclosure */
+    --hover:color-mix(in srgb,var(--fg) 7%,transparent);
+    --active:color-mix(in srgb,var(--fg) 12%,transparent);
+    --focus:#5b9cf8;
+    /* type ramp */
+    --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+    --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+    --t-caption:11px; --t-body:12px; --t-title:14px;
+    /* layout metrics: rows stay dense, padding inside rows 8–12px */
+    --row-h:34px; --gutter:14px; --gap:8px;
   }
   *{box-sizing:border-box;margin:0;padding:0}
   html,body{height:100%}
   body{
-    background:var(--bg); color:var(--txt);
-    font:13px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+    background:var(--bg); color:var(--fg);
+    font:var(--t-body)/1.45 var(--sans);
     display:flex; flex-direction:column; overflow:hidden;
     -webkit-font-smoothing:antialiased;
   }
+  :focus-visible{outline:2px solid var(--focus); outline-offset:-2px}
+
+  /* ---- header: what changed · what to do · what's blocked, in one line ---- */
   header{
-    display:flex; align-items:center; gap:22px; padding:12px 18px;
-    border-bottom:1px solid var(--line); background:var(--panel2); flex:none;
+    display:flex; align-items:center; gap:18px; padding:10px 16px;
+    border-bottom:1px solid var(--line); background:var(--surface); flex:none;
   }
-  .mark{font:600 13px/1 ui-monospace,monospace; letter-spacing:.16em; color:var(--txt)}
-  .mark span{color:var(--dim)}
-  .dot{width:7px;height:7px;border-radius:50%;background:var(--in);box-shadow:0 0 8px var(--in);
-       animation:pulse 2.4s ease-in-out infinite; flex:none}
-  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
-  .stats{display:flex; gap:26px; margin-left:auto}
+  .mark{font:600 var(--t-title)/1 var(--mono); letter-spacing:.16em}
+  .mark span{color:var(--faint); letter-spacing:.1em}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--ok);flex:none}
+  .dot.bad{background:var(--bad)}
+  .dot.off{background:var(--neutral);animation:none}
+  .headline{font-size:var(--t-body); color:var(--muted)}
+  .headline b{color:var(--fg); font-weight:600}
+  .headline .bad{color:var(--bad)}
+  .stats{display:flex; gap:20px; margin-left:auto}
   .stat{display:flex; flex-direction:column; gap:1px}
-  .stat b{font:600 15px/1.1 ui-monospace,monospace; font-variant-numeric:tabular-nums}
-  .stat i{font-style:normal; font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted)}
-  .stat.bad b{color:var(--flag)}
+  .stat b{font:600 var(--t-title)/1.1 var(--mono); font-variant-numeric:tabular-nums}
+  .stat i{font-style:normal; font-size:var(--t-caption); letter-spacing:.1em;
+          text-transform:uppercase; color:var(--muted)}
+  .stat.bad b{color:var(--bad)}
 
+  /* ---- shell: dense list on the left, detail on the right ---- */
   main{flex:1; display:flex; min-height:0}
-  #stage{flex:1; position:relative; min-width:0}
-  canvas{display:block; width:100%; height:100%}
-  .cap{
-    position:absolute; top:14px; left:18px; font-size:10px; letter-spacing:.12em;
-    text-transform:uppercase; color:var(--dim); pointer-events:none;
-  }
-  .hint{
-    position:absolute; bottom:12px; left:18px; font-size:11px; color:var(--dim);
-    pointer-events:none; transition:opacity .4s;
-  }
 
-  aside{
-    width:330px; flex:none; border-left:1px solid var(--line);
-    background:var(--panel2); display:flex; flex-direction:column; min-height:0;
+  #list{width:378px; flex:none; border-right:1px solid var(--line);
+        display:flex; flex-direction:column; min-height:0; background:var(--bg)}
+  .filters{display:flex; gap:6px; padding:10px var(--gutter) 8px; flex:none;
+           border-bottom:1px solid var(--line-soft); align-items:center}
+  .filters .count{margin-left:auto; color:var(--faint); font-size:var(--t-caption);
+                  font-family:var(--mono); font-variant-numeric:tabular-nums}
+  .chip{
+    border:1px solid var(--line); border-radius:999px; background:transparent;
+    color:var(--muted); font:inherit; font-size:var(--t-caption);
+    padding:3px 10px; cursor:pointer;
   }
-  .sect{padding:14px 16px; border-bottom:1px solid var(--line)}
-  .sect h2{
-    font-size:10px; letter-spacing:.14em; text-transform:uppercase;
-    color:var(--muted); font-weight:600; margin-bottom:10px;
-    display:flex; justify-content:space-between; align-items:baseline;
-  }
-  .sect h2 em{font-style:normal; color:var(--dim); font-family:ui-monospace,monospace}
-  .flags{max-height:190px; overflow:auto}
-  .flag{
-    display:flex; gap:8px; padding:7px 0; border-bottom:1px solid #171c22; align-items:baseline;
-  }
-  .flag:last-child{border-bottom:0}
-  .flag .who{color:var(--flag); font-family:ui-monospace,monospace; font-size:11px; flex:none; width:84px;
-              overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
-  .flag .what{color:var(--muted); font-size:11px; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
-  .flag .why{color:var(--flag); font-size:10px; flex:none; opacity:.85}
-  .empty{color:var(--dim); font-size:11px; font-style:italic}
-
+  .chip[aria-pressed="true"]{background:var(--fg); color:var(--bg);
+    border-color:var(--fg); font-weight:600}
+  .chip:hover{background:var(--hover); color:var(--fg)}
+  .chip[aria-pressed="true"]:hover{background:var(--fg); color:var(--bg)}
   .rows{overflow:auto; flex:1}
-  .row{display:grid; grid-template-columns:1fr auto; gap:8px; padding:6px 0; align-items:center}
-  .row .nm{font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
-  .row .nm s{color:var(--dim); text-decoration:none; font-size:10px; margin-left:6px;
-             font-family:ui-monospace,monospace}
-  .row .v{font:11px ui-monospace,monospace; color:var(--muted); font-variant-numeric:tabular-nums}
-  .bar{grid-column:1/-1; height:3px; border-radius:2px; background:#171d24; overflow:hidden; margin-top:-3px}
-  .bar span{display:block; height:100%; border-radius:2px}
-  .swatch{display:inline-block; width:6px;height:6px;border-radius:1px;margin-right:7px;vertical-align:middle}
-  ::-webkit-scrollbar{width:6px}
-  ::-webkit-scrollbar-thumb{background:#222a33;border-radius:3px}
-  ::-webkit-scrollbar-track{background:transparent}
+  .row{
+    width:100%; text-align:left; border:0; background:transparent; color:inherit;
+    font:inherit; display:grid; cursor:pointer; outline:none;
+    grid-template-columns:10px 1fr auto;
+    column-gap:10px; align-items:center;
+    min-height:var(--row-h); padding:6px var(--gutter);
+    border-bottom:1px solid var(--line-soft);
+  }
+  /* hover is instant, on the whole row only: it is one clickable target */
+  .row:hover{background:var(--hover)}
+  /* selection swaps in the same frame, no press overlay */
+  .row[aria-selected="true"]{background:var(--active)}
+  .dotcell{width:6px; height:6px; border-radius:50%; background:var(--neutral); justify-self:center}
+  .dotcell.flag{background:var(--bad)}
+  .row .main{min-width:0; display:flex; flex-direction:column; gap:1px}
+  .row .host{overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .row .host .proc{color:var(--muted); font-size:var(--t-caption)}
+  .row .host .ip{color:var(--faint); font-family:var(--mono); font-size:var(--t-caption)}
+  .row .bytes{font:var(--t-caption) var(--mono); color:var(--muted);
+              font-variant-numeric:tabular-nums; text-align:right}
+  .row .bytes.flag{color:var(--bad)}
+  .empty{color:var(--faint); font-style:italic; padding:18px var(--gutter);
+         font-size:var(--t-caption)}
+  .empty .act{margin-top:8px; font-style:normal; color:var(--muted)}
+
+  /* ---- detail pane: what it is, why it is flagged, what to do ---- */
+  #detail{flex:1; display:flex; flex-direction:column; min-height:0; min-width:0;
+          background:var(--surface)}
+  .detail-head{
+    display:flex; align-items:baseline; gap:10px; padding:12px var(--gutter);
+    border-bottom:1px solid var(--line); flex:none;
+  }
+  .detail-head .t{font-weight:600; font-size:var(--t-title)}
+  .detail-head .s{color:var(--faint); font-family:var(--mono); font-size:var(--t-caption);
+                  overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .detail-body{overflow:auto; flex:1; padding:14px var(--gutter) 20px}
+  .fact{display:grid; grid-template-columns:96px 1fr; column-gap:10px;
+        padding:6px 0; border-bottom:1px solid var(--line-soft);
+        font-size:var(--t-body)}
+  .fact dt{color:var(--muted)}
+  .fact dd{font-variant-numeric:tabular-nums; font-family:var(--mono);
+           font-size:var(--t-caption); align-self:center}
+  .note{
+    margin-top:12px; padding:10px 12px; border-radius:6px;
+    background:color-mix(in srgb,var(--bad) 10%,transparent);
+    border:1px solid color-mix(in srgb,var(--bad) 35%,transparent);
+    color:var(--fg); font-size:var(--t-body);
+  }
+  .note.warn{background:color-mix(in srgb,var(--warn) 10%,transparent);
+             border-color:color-mix(in srgb,var(--warn) 35%,transparent)}
+  .note b{color:var(--bad)}
+  .note.warn b{color:var(--warn)}
+  .note .why{display:block; margin-top:2px; color:var(--muted); font-size:var(--t-caption)}
+  .actions{display:flex; gap:8px; margin-top:14px; flex-wrap:wrap}
+  button.act{
+    font:600 var(--t-caption) var(--sans); padding:6px 12px; border-radius:6px;
+    border:1px solid var(--line); background:transparent; color:var(--fg);
+    cursor:pointer;
+  }
+  button.act:hover{background:var(--hover)}
+  button.act.primary{background:var(--accent); border-color:var(--accent); color:#08111e}
+  button.act.primary:hover{filter:brightness(1.1)}
+  .links{margin-top:16px}
+  .links h3{font-size:var(--t-caption); letter-spacing:.12em; text-transform:uppercase;
+            color:var(--muted); font-weight:600; margin-bottom:6px}
+  .links .r{display:grid; grid-template-columns:1fr auto; column-gap:10px;
+            padding:5px 0; border-bottom:1px solid var(--line-soft);
+            font-size:var(--t-caption)}
+  .links .r .h{overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .links .r .h .p{color:var(--muted)}
+  .links .r .v{font-family:var(--mono); color:var(--muted); font-variant-numeric:tabular-nums}
+  .graph{margin-top:18px}
+  .graph h3{font-size:var(--t-caption); letter-spacing:.12em; text-transform:uppercase;
+            color:var(--muted); font-weight:600; margin-bottom:8px}
+  .graph a{color:var(--accent); font-size:var(--t-caption); text-decoration:none}
+  .graph a:hover{text-decoration:underline}
+
+  /* keyboard hint bar: what is available, always visible */
+  .keys{
+    flex:none; border-top:1px solid var(--line); background:var(--surface);
+    padding:6px var(--gutter); display:flex; gap:16px; font-size:var(--t-caption);
+    color:var(--faint);
+  }
+  .keys kbd{
+    font:var(--t-caption) var(--mono); color:var(--muted);
+    border:1px solid var(--line); border-radius:4px; padding:1px 5px;
+  }
 </style>
 </head>
 <body>
 <header>
   <div class="dot" id="dot"></div>
   <div class="mark">NETLINE <span>/ live</span></div>
+  <div class="headline" id="headline">loading…</div>
   <div class="stats">
     <div class="stat"><b id="s-flows">—</b><i>flows</i></div>
     <div class="stat"><b id="s-in">—</b><i>in</i></div>
     <div class="stat"><b id="s-out">—</b><i>out</i></div>
-    <div class="stat"><b id="s-named">—</b><i>named</i></div>
     <div class="stat bad"><b id="s-flags">—</b><i>flagged</i></div>
   </div>
 </header>
 
 <main>
-  <div id="stage">
-    <canvas id="c"></canvas>
-    <div class="cap">process → destination &nbsp;·&nbsp; arc weight = bytes &nbsp;·&nbsp; dot direction = who pulled</div>
-    <div class="hint" id="hint">click a node to isolate it</div>
+  <div id="list" role="listbox" aria-label="destinations">
+    <div class="filters" role="group" aria-label="filters">
+      <button class="chip" data-f="flagged" aria-pressed="true">Flagged</button>
+      <button class="chip" data-f="all" aria-pressed="false">All</button>
+      <span class="count" id="count"></span>
+    </div>
+    <div class="rows" id="rows" tabindex="0"></div>
   </div>
 
-  <aside>
-    <div class="sect">
-      <h2>flagged <em id="flag-count">0</em></h2>
-      <div class="flags" id="flags"></div>
+  <div id="detail">
+    <div class="detail-head">
+      <span class="t" id="d-name">—</span>
+      <span class="s" id="d-sub"></span>
     </div>
-    <div class="sect" style="flex:1;display:flex;flex-direction:column;min-height:0;border-bottom:0">
-      <h2>top destinations <em>15 min</em></h2>
-      <div class="rows" id="top"></div>
+    <div class="detail-body" id="d-body"></div>
+    <div class="keys">
+      <span><kbd>j</kbd>/<kbd>k</kbd> next/prev</span>
+      <span><kbd>/</kbd> toggle flagged</span>
+      <span><kbd>Enter</kbd>/<kbd>g</kbd> open graph</span>
     </div>
-  </aside>
+  </div>
 </main>
 
 <script>
-const PALETTE = ["#3ddc84","#5b9cf8","#f0a92b","#c084fc","#f472b6","#22d3ee",
-                 "#a3e635","#fb923c","#94a3b8","#f87171","#2dd4bf","#e879f9"];
+/* ---------- tokens as data: the palette and text colours come from CSS ---- */
+const css = getComputedStyle(document.documentElement);
+const tok = n => css.getPropertyValue(n).trim();
+const C = {
+  ok: tok("--ok"), warn: tok("--warn"), bad: tok("--bad"),
+  neutral: tok("--neutral"), fg: tok("--fg"), muted: tok("--muted"),
+  faint: tok("--faint"), accent: tok("--accent"),
+};
+const PALETTE = [C.ok, C.accent, C.warn, "#c084fc", "#f472b6", "#22d3ee",
+                 "#a3e635", "#fb923c", C.neutral, "#f87171", "#2dd4bf", "#e879f9"];
 
-const cv = document.getElementById("c");
-const ctx = cv.getContext("2d");
-let DPR = window.devicePixelRatio || 1;
-let W = 0, H = 0;
 let data = null;
-let nodes = { p: [], d: [] };
-let selected = null;
-let hovered = null;
-let phase = 0;
+let filter = "flagged";       // "flagged" | "all"
+let items = [];               // rows in render order
+let sel = -1;                 // index into items
 
-function fit() {
-  const r = cv.parentElement.getBoundingClientRect();
-  W = r.width; H = r.height;
-  cv.width = W * DPR; cv.height = H * DPR;
-  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-}
-window.addEventListener("resize", () => { DPR = window.devicePixelRatio || 1; fit(); layout(); });
-
-function human(n) {
+function human(n){
   n = n || 0;
   const u = ["B","K","M","G","T"];
   let i = 0;
-  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
-  return (n < 10 && i > 0 ? n.toFixed(1) : Math.round(n)) + u[i];
+  while (n >= 1024 && i < u.length - 1){ n /= 1024; i++; }
+  return (i === 0 ? n : n.toFixed(n < 10 ? 1 : 0)) + u[i];
+}
+function esc(s){
+  return String(s == null ? "" : s).replace(/[&<>"']/g, c =>
+    ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
+}
+function ago(ts){
+  const s = Math.max(0, Date.now()/1000 - ts);
+  if (s < 60) return "just now";
+  if (s < 3600) return Math.round(s/60) + "m ago";
+  if (s < 86400) return Math.round(s/3600) + "h ago";
+  return Math.round(s/86400) + "d ago";
 }
 
-function layout() {
-  if (!data) return;
-  const procs = data.procs.slice(0, 10);
-  const dests = data.dests.slice(0, 14);
-  const padTop = 56, padBot = 40;
-  const usable = H - padTop - padBot;
-
-  nodes.p = procs.map((p, i) => ({
-    id: p.name, x: Math.min(190, W * 0.20),
-    y: padTop + (usable / Math.max(1, procs.length - 1)) * i,
-    bytes: p.bytes, color: PALETTE[i % PALETTE.length], kind: "p"
+/* ---------- rows: one per destination, worst first ------------------------ */
+function buildItems(){
+  const ds = data.dests || [];
+  const byFlag = [...ds].sort((a,b) => (b.flag - a.flag) || (b.bytes - a.bytes));
+  const list = filter === "flagged" ? byFlag.filter(d => d.flag) : byFlag;
+  items = list.map(d => ({
+    ...d,
+    key: d.name + "|" + (d.ip || ""),
+    procs: procsFor(d.name, d.ip),
   }));
-  nodes.d = dests.map((d, i) => ({
-    id: d.name, sub: d.ip, x: W - Math.min(250, W * 0.26),
-    y: padTop + (usable / Math.max(1, dests.length - 1)) * i,
-    bytes: d.bytes, kind: "d"
-  }));
+}
+function procsFor(name, ip){
+  const procs = new Map();
+  for (const l of (data.links || [])){
+    const matches = (l.dst === ip) || (l.dst === name) ||
+      ((data.dests.find(x => x.name === name && x.ip === ip) || {}).name === name &&
+       (l.dst === ip || l.dst === name));
+    if (!matches) continue;
+    procs.set(l.proc, (procs.get(l.proc) || 0) + l.out + l.in);
+  }
+  return [...procs.entries()]
+    .map(([p, b]) => ({ p, b }))
+    .sort((a,b) => b.b - a.b).slice(0, 4);
 }
 
-function links() {
-  if (!data) return [];
-  const pIdx = new Map(nodes.p.map(n => [n.id, n]));
-  const dIdx = new Map(nodes.d.map(n => [n.id, n]));
-  return data.links
-    .map(l => {
-      const p = pIdx.get(l.proc), d = dIdx.get(l.dst);
-      if (!p || !d) return null;
-      return { p, d, out: l.out, in: l.in, bytes: l.out + l.in, flag: l.flag };
-    })
-    .filter(Boolean)
-    .sort((a, b) => a.bytes - b.bytes);
+function renderList(){
+  const el = document.getElementById("rows");
+  el.replaceChildren();
+  if (!items.length){
+    const p = document.createElement("div");
+    p.className = "empty";
+    p.innerHTML = filter === "flagged"
+      ? 'nothing flagged in the last 15 minutes<div class="act">All traffic is within its usual bounds. <kbd>/</kbd> shows every destination.</div>'
+      : 'no traffic captured yet<div class="act">Check that the collector is running: <span style="font-family:var(--mono)">systemctl status netline</span></div>';
+    el.append(p);
+    document.getElementById("count").textContent = "0";
+    return;
+  }
+  items.forEach((d, i) => {
+    const row = document.createElement("div");
+    row.className = "row";
+    row.setAttribute("role", "option");
+    row.setAttribute("aria-selected", String(i === sel));
+    row.dataset.i = i;
+    row.innerHTML =
+      `<span class="dotcell ${d.flag ? "flag" : ""}"></span>` +
+      `<span class="main"><span class="host">${esc(d.name)}` +
+      (d.ip ? ` <span class="ip">${esc(d.ip)}</span>` : "") +
+      (d.procs.length ? ` <span class="proc">· ${esc(d.procs[0].p)}</span>` : "") +
+      `</span></span>` +
+      `<span class="bytes ${d.flag ? "flag" : ""}">${human(d.bytes)}</span>`;
+    row.addEventListener("click", () => select(i, false));
+    el.append(row);
+  });
+  document.getElementById("count").textContent = String(items.length);
 }
 
-function bez(a, b) {
-  const mx = (a.x + b.x) / 2;
-  const dy = Math.min(90, Math.abs(b.y - a.y) * 0.35);
-  return { cx: mx, cy: (a.y + b.y) / 2 - dy };
-}
+/* ---------- detail: what it is, why flagged, what to do ------------------- */
+function renderDetail(){
+  const name = document.getElementById("d-name");
+  const sub = document.getElementById("d-sub");
+  const body = document.getElementById("d-body");
+  if (sel < 0 || !items[sel]){
+    name.textContent = "No selection";
+    sub.textContent = "";
+    body.innerHTML = '<div class="empty">Select a destination on the left, or press <kbd>j</kbd>.</div>';
+    return;
+  }
+  const d = items[sel];
+  name.textContent = d.name;
+  sub.textContent = d.ip || "";
 
-function draw(dt) {
-  if (!data) return;
-  phase += dt;
-  ctx.clearRect(0, 0, W, H);
+  const top = d.procs[0];
+  const fact = (k, v) => `<div class="fact"><dt>${k}</dt><dd>${v}</dd></div>`;
+  let html = "";
+  html += fact("Total", human(d.bytes));
+  html += fact("In", human(d["in"]));
+  html += fact("Out", human(d.out));
+  html += fact("Flows", String(d.flows));
 
-  const L = links();
-  const maxB = Math.max(1, ...L.map(l => l.bytes));
-  const focus = selected || hovered;
-
-  // ---- arcs
-  for (const l of L) {
-    const active = !focus || l.p.id === focus || l.d.id === focus;
-    const { cx, cy } = bez(l.p, l.d);
-    const w = 0.6 + 5.2 * Math.log10(1 + l.bytes) / Math.log10(1 + maxB);
-    ctx.save();
-    ctx.globalAlpha = active ? 0.9 : 0.06;
-    const g = ctx.createLinearGradient(l.p.x, l.p.y, l.d.x, l.d.y);
-    g.addColorStop(0, l.p.color);
-    g.addColorStop(1, l.flag ? "#ef4444" : "#3a6ea8");
-    ctx.strokeStyle = g;
-    ctx.lineWidth = w;
-    ctx.lineCap = "round";
-    ctx.beginPath();
-    ctx.moveTo(l.p.x + 6, l.p.y);
-    ctx.quadraticCurveTo(cx, cy, l.d.x - 6, l.d.y);
-    ctx.stroke();
-    ctx.restore();
-
-    // direction dot: travels toward whichever side is smaller (the puller's peer)
-    if (active && l.bytes > maxB * 0.06) {
-      const t = (phase * 0.22 + (l.p.x + l.d.y) % 90 / 90) % 1;
-      const tt = l.in > l.out ? 1 - t : t;   // data flowing in = right→left
-      const x = (1 - tt) ** 2 * (l.p.x + 6) + 2 * (1 - tt) * tt * cx + tt ** 2 * (l.d.x - 6);
-      const y = (1 - tt) ** 2 * l.p.y + 2 * (1 - tt) * tt * cy + tt ** 2 * l.d.y;
-      ctx.save();
-      ctx.globalAlpha = 0.85;
-      ctx.fillStyle = l.in > l.out ? "#3ddc84" : "#f0a92b";
-      ctx.shadowColor = ctx.fillStyle; ctx.shadowBlur = 7;
-      ctx.beginPath(); ctx.arc(x, y, Math.min(2.6, 1 + w * 0.4), 0, 7); ctx.fill();
-      ctx.restore();
+  if (d.flag){
+    const reasons = (data.flags || []).filter(f =>
+      (f.host === d.name || f.dst === (d.ip || "")) ||
+      (!f.host && f.dst === d.name));
+    if (reasons.length){
+      const worst = reasons[0];
+      html += `<div class="note"><b>${esc(worst.reason)}</b>` +
+              `<span class="why">${esc(d.procs.map(x => x.p).join(", ") || "unknown process")} · last 15 min</span></div>`;
+    } else {
+      html += `<div class="note warn"><b>Flagged by volume</b>` +
+              `<span class="why">no per-flow reason attached in this window</span></div>`;
     }
   }
 
-  // ---- process nodes
-  ctx.font = "500 11px ui-monospace, monospace";
-  ctx.textBaseline = "middle";
-  for (const n of nodes.p) {
-    const on = !focus || n.id === focus;
-    ctx.globalAlpha = on ? 1 : 0.25;
-    ctx.fillStyle = n.color;
-    ctx.beginPath(); ctx.arc(n.x, n.y, 4, 0, 7); ctx.fill();
-    ctx.shadowColor = n.color; ctx.shadowBlur = on ? 9 : 0;
-    ctx.beginPath(); ctx.arc(n.x, n.y, 2, 0, 7); ctx.fill();
-    ctx.shadowBlur = 0;
-    ctx.textAlign = "right";
-    ctx.fillStyle = on ? "#dfe6ee" : "#7a8697";
-    ctx.fillText(n.id.slice(0, 18), n.x - 12, n.y);
-    ctx.textAlign = "left";
-  }
+  html += '<div class="actions">';
+  if (d.flag) html += '<button class="act primary" data-a="copy">Copy details</button>';
+  html += '<button class="act" data-a="graph">Open activity graph</button>';
+  html += '</div>';
 
-  // ---- destination nodes
-  for (const n of nodes.d) {
-    const on = !focus || n.id === focus;
-    ctx.globalAlpha = on ? 1 : 0.25;
-    ctx.fillStyle = "#2b3440";
-    ctx.beginPath(); ctx.arc(n.x, n.y, 3.4, 0, 7); ctx.fill();
-    ctx.fillStyle = "#5b6777";
-    ctx.beginPath(); ctx.arc(n.x, n.y, 1.6, 0, 7); ctx.fill();
-    ctx.fillStyle = on ? "#dfe6ee" : "#7a8697";
-    ctx.font = "500 11px ui-monospace, monospace";
-    ctx.fillText(n.id.slice(0, 30), n.x + 12, n.y);
-    if (n.sub) {
-      ctx.fillStyle = "#4a5461";
-      ctx.font = "10px ui-monospace, monospace";
-      ctx.fillText(n.sub, n.x + 12, n.y + 12);
-    }
-    ctx.textAlign = "left";
+  if (d.procs.length){
+    html += '<div class="links"><h3>Processes behind it</h3>';
+    for (const p of d.procs)
+      html += `<div class="r"><span class="h">${esc(p.p)}</span>` +
+              `<span class="v">${human(p.b)}</span></div>`;
+    html += '</div>';
   }
-  ctx.globalAlpha = 1;
+  const related = (data.links || []).filter(l =>
+    l.dst === (d.ip || d.name)).sort((a,b) => (b.out + b["in"] || 0) - (a.out + a["in"] || 0)).slice(0, 6);
+  if (related.length){
+    html += '<div class="links"><h3>Connections</h3>';
+    for (const l of related)
+      html += `<div class="r"><span class="h">${esc(l.proc)} <span class="p">→ ${esc(l.dst)}</span></span>` +
+              `<span class="v">${human((l.out || 0) + (l["in"] || 0))}${l.flag ? ' <span style="color:var(--bad)">·</span>' : ""}</span></div>`;
+    html += '</div>';
+  }
+  html += `<div class="graph"><h3>Full activity</h3>` +
+          `<a href="/arc?focus=${encodeURIComponent(d.name)}">Open the arc graph ↗</a></div>`;
+  body.innerHTML = html;
+  body.querySelectorAll("button.act").forEach(b => b.addEventListener("click", () => act(b.dataset.a, d)));
 }
 
-function pick(mx, my) {
-  let best = null, bd = 22 * 22;
-  for (const n of [...nodes.p, ...nodes.d]) {
-    const dx = n.x - mx, dy = n.y - my;
-    const d2 = dx * dx + dy * dy;
-    if (d2 < bd) { bd = d2; best = n; }
+function act(a, d){
+  if (a === "graph"){
+    location.href = "/arc?focus=" + encodeURIComponent(d.name);
+  } else if (a === "copy"){
+    const text = `netline: ${d.name} (${d.ip || "no ip"})\n` +
+                 `bytes ${human(d.bytes)} · in ${human(d["in"])} · out ${human(d.out)} · ${d.flows} flows`;
+    navigator.clipboard?.writeText(text);
   }
-  return best;
 }
 
-cv.addEventListener("mousemove", e => {
-  const r = cv.getBoundingClientRect();
-  const h = pick(e.clientX - r.left, e.clientY - r.top);
-  hovered = h ? h.id : null;
-  cv.style.cursor = h ? "pointer" : "default";
-});
-cv.addEventListener("mouseleave", () => { hovered = null; });
-cv.addEventListener("click", e => {
-  const r = cv.getBoundingClientRect();
-  const h = pick(e.clientX - r.left, e.clientY - r.top);
-  selected = (h && selected !== h.id) ? h.id : null;
-  document.getElementById("hint").style.opacity = selected ? 0 : 1;
+/* ---------- selection + keyboard ------------------------------------------ */
+function select(i, scroll = true){
+  sel = Math.max(0, Math.min(items.length - 1, i));
+  document.querySelectorAll("#rows .row").forEach(r =>
+    r.setAttribute("aria-selected", String(Number(r.dataset.i) === sel)));
+  if (scroll){
+    const el = document.querySelector(`#rows .row[data-i="${sel}"]`);
+    el?.scrollIntoView({ block: "nearest" });
+  }
+  renderDetail();
+}
+document.addEventListener("keydown", e => {
+  if (e.target instanceof HTMLInputElement) return;
+  if (e.key === "j" || e.key === "ArrowDown"){ e.preventDefault(); select(sel + 1); }
+  else if (e.key === "k" || e.key === "ArrowUp"){ e.preventDefault(); select(sel - 1); }
+  else if (e.key === "g" || e.key === "Enter"){
+    e.preventDefault();
+    if (items[sel]) location.href = "/arc?focus=" + encodeURIComponent(items[sel].name);
+  }
+  else if (e.key === "/"){ e.preventDefault(); setFilter(filter === "flagged" ? "all" : "flagged"); }
 });
 
-let last = performance.now();
-function loop(now) {
-  const dt = Math.min(0.05, (now - last) / 1000);
-  last = now;
-  draw(dt);
-  requestAnimationFrame(loop);
+function setFilter(f){
+  filter = f;
+  document.querySelectorAll(".chip").forEach(c =>
+    c.setAttribute("aria-pressed", String(c.dataset.f === f)));
+  sel = -1;
+  buildItems();
+  renderList();
+  if (items.length) select(0);
+  else renderDetail();
+}
+document.querySelectorAll(".chip").forEach(c =>
+  c.addEventListener("click", () => setFilter(c.dataset.f)));
+
+/* ---------- header: the three answers, one line --------------------------- */
+function renderHeader(){
+  const f = (data.flags || []).length;
+  const dot = document.getElementById("dot");
+  dot.className = "dot" + (data.live === false ? " off" : f ? " bad" : "");
+  const h = document.getElementById("headline");
+  if (data.live === false)
+    h.innerHTML = 'capture is <b class="bad">stale</b> — check <span style="font-family:var(--mono)">systemctl status netline</span>';
+  else if (f)
+    h.innerHTML = `<b>${f}</b> destination${f === 1 ? "" : "s"} need review in the last 15 min`;
+  else
+    h.textContent = "all traffic within usual bounds";
+  document.getElementById("s-flows").textContent = data.stats.flows.toLocaleString();
+  document.getElementById("s-in").textContent = human(data.stats["in"]);
+  document.getElementById("s-out").textContent = human(data.stats.out);
+  document.getElementById("s-flags").textContent = f;
 }
 
-async function load() {
-  try {
+/* ---------- load ---------------------------------------------------------- */
+async function load(){
+  try{
     const r = await fetch("/api/data", { cache: "no-store" });
     data = await r.json();
-    document.getElementById("dot").style.background = "#3ddc84";
-    renderSide();
-    layout();
-  } catch (e) {
-    document.getElementById("dot").style.background = "#ef4444";
+    renderHeader();
+    buildItems();
+    renderList();
+    if (sel < 0 || sel >= items.length) sel = items.length ? 0 : -1;
+    if (sel >= 0) select(sel, false); else renderDetail();
+  } catch (e){
+    document.getElementById("dot").className = "dot off";
+    document.getElementById("headline").textContent = "collector unreachable";
   }
 }
 
-function renderSide() {
-  const f = data.flags || [];
-  document.getElementById("s-flows").textContent = data.stats.flows.toLocaleString();
-  document.getElementById("s-in").textContent = human(data.stats.in);
-  document.getElementById("s-out").textContent = human(data.stats.out);
-  document.getElementById("s-named").textContent = data.stats.named.toLocaleString();
-  document.getElementById("s-flags").textContent = f.length;
-  document.getElementById("flag-count").textContent = f.length;
-
-  const fl = document.getElementById("flags");
-  fl.innerHTML = f.length ? f.slice(0, 12).map(x => `
-    <div class="flag">
-      <span class="who">${esc(x.comm || "?")}</span>
-      <span class="what">→ ${esc(x.host || x.dst)}</span>
-      <span class="why">${esc(x.reason)}</span>
-    </div>`).join("") : '<div class="empty">nothing anomalous</div>';
-
-  const max = Math.max(1, ...data.dests.map(d => d.bytes));
-  document.getElementById("top").innerHTML = data.dests.slice(0, 20).map((d, i) => {
-    const pct = (d.bytes / max) * 100;
-    const col = d.flag ? "#ef4444" : PALETTE[i % PALETTE.length];
-    return `<div class="row">
-      <span class="nm"><i class="swatch" style="background:${col}"></i>${esc(d.name)}<s>${esc(d.ip || "")}</s></span>
-      <span class="v">${human(d.bytes)}</span>
-      <div class="bar"><span style="width:${pct}%;background:${col}"></span></div>
-    </div>`;
-  }).join("");
-}
-
-function esc(s) {
-  return String(s == null ? "" : s).replace(/[&<>"']/g, c =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-}
-
-fit(); layout(); load();
+load();
 setInterval(load, 3000);
-requestAnimationFrame(loop);
 </script>
 </body>
 </html>
