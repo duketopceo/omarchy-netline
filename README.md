@@ -43,8 +43,10 @@ collector runs as root, so it reads its home from an env file rather than `%h`:
 
 ```bash
 sudo install -d /etc/netline
-echo "NETLINE_STATE=$HOME/.local/share/netline" \
-  | sudo tee /etc/netline/netline.env
+sudo tee /etc/netline/netline.env >/dev/null <<EOF
+NETLINE_PLUGIN=$HOME/.config/omarchy/plugins/lukedaduke.netline
+NETLINE_STATE=$HOME/.local/share/netline
+EOF
 sudo cp systemd/netline.service /etc/systemd/system/
 sudo systemctl enable --now netline
 mkdir -p ~/.config/systemd/user
