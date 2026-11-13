@@ -121,10 +121,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlparse(self.path).path
-        # `/` is the lightweight hex map; `/arc` keeps the old canvas view for
-        # when the per-link arcs are what you want to look at.
-        page = {"/": "gui-hex.html", "/index.html": "gui-hex.html",
-                "/arc": "gui.html", "/arc.html": "gui.html"}.get(path)
+        # `/` is the triage console; `/arc` is the graph drill-down the detail
+        # pane links to; `/hex` keeps the experimental cell map.
+        page = {"/": "gui.html", "/index.html": "gui.html",
+                "/arc": "gui.html", "/arc.html": "gui.html",
+                "/hex": "gui-hex.html", "/hex.html": "gui-hex.html"}.get(path)
         if page:
             try:
                 with open(os.path.join(HERE, page), "rb") as f:
