@@ -66,9 +66,15 @@ Panel {
   }
 
   function openMap() {
-    if (openProc.running) return
+    if (root.opening) return
     root.opening = true
-    openProc.running = true
+    // Qt owns the live session and resolves the desktop browser through its
+    // D-Bus connection. The helper's deliberately-minimal process env lacked
+    // DBUS_SESSION_BUS_ADDRESS, so xdg-open silently could not launch.
+    if (!Qt.openUrlExternally("http://127.0.0.1:8899/"))
+      root.lastError = "could not open the traffic map"
+    root.opening = false
+    root.close()
   }
 
   function restartNetline() {
@@ -97,15 +103,6 @@ Panel {
     onExited: statusDeadline.stop()
   }
 
-  Process {
-    id: openProc
-    command: [root.py, root.pluginRoot + "/bin/status.py", "open"]
-    clearEnvironment: true
-    environment: root.procEnv
-    stdout: StdioCollector { waitForEnd: true; onStreamFinished: { root.opening = false; root.close() } }
-    stderr: StdioCollector { waitForEnd: true; onStreamFinished: {} }
-    onExited: root.opening = false
-  }
 
   Process {
     id: restartProc

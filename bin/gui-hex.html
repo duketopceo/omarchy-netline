@@ -41,8 +41,11 @@
   main{flex:1;overflow:auto;padding:18px 16px 24px}
   /* Offset every other row so cells interlock. Negative margin on the row
      closes the vertical gap a hexagon's pointy top would otherwise leave. */
-  .hexrow{display:flex;gap:3px;margin-bottom:-13px;padding-left:0}
-  .hexrow:nth-child(even){padding-left:31px}
+  /* The browser chooses the column count. The former fixed 16-cell rows
+     clipped cells off the right edge on narrow dashboard windows. */
+  #map{display:grid;grid-template-columns:repeat(auto-fill,60px);gap:3px;
+       overflow:hidden;padding:0 0 14px}
+  .hexrow{display:contents}
   .hex{
     --c:var(--accent);
     position:relative;flex:none;width:60px;height:66px;
@@ -98,7 +101,6 @@
 <script>
 const PAL = ["#5b9cf8","#3ddc84","#c084fc","#22d3ee","#f0a92b","#f472b6",
              "#a3e635","#fb923c","#2dd4bf","#e879f9","#94a3b8","#f87171"];
-const PER_ROW = 16;
 
 function human(n){
   n = n || 0;
@@ -133,12 +135,7 @@ function render(data){
     return;
   }
   const scale = dests[0].bytes || 1;
-  for (let i = 0; i < dests.length; i += PER_ROW){
-    const row = document.createElement("div");
-    row.className = "hexrow";
-    dests.slice(i, i + PER_ROW).forEach((d, j) => row.append(cell(d, scale, i + j)));
-    map.append(row);
-  }
+  dests.forEach((d, i) => map.append(cell(d, scale, i)));
 }
 
 function stats(d){
